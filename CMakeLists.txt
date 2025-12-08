@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 
 # If you rename the directory, CMake will default PROJECT_NAME to that dir name
-project(demo_stabilizer CXX)
+project(basic_stabilizer CXX)
 
 # Source file convention: <project_name>.cpp
 set(${PROJECT_NAME}_SOURCES
@@ -14,7 +14,7 @@ add_library(${PROJECT_NAME} SHARED
 )
 
 # Includes:
-# - current directory      → demo_stabilizer.h
+# - current directory      → basic_stabilizer.h
 # - repo root/processing-libs → processor_api.h
 #
 # NOTE:
