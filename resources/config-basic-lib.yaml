@@ -1,4 +1,0 @@
-name: name
-processing-lib-path: /home/fronti/gst-plugins/processing-libs/video-stabilization/basic_stabilizer/build/libbasic_stabilizer.so
-processing-lib-config-path: /home/fronti/gst-plugins/processing-libs/video-stabilization/basic_stabilizer/resources/config-basic.yaml
-debug-first-run: true
