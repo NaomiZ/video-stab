@@ -37,6 +37,30 @@ static ProcStatus nv_stab_init(const char* config_path, void** ctx)
     return PROC_STATUS_OK;
 }
 
+static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
+{
+    (void)c;
+    (void)frame;
+    return PROC_STATUS_OK;
+}
+
+static ProcStatus nv_stab_compute_flow(NvStabCtx* c)
+{
+    (void)c;
+    return PROC_STATUS_OK;
+}
+
+static ProcStatus nv_stab_compute_transform(NvStabCtx* c)
+{
+    (void)c;
+    return PROC_STATUS_OK;
+}
+
+static ProcStatus nv_stab_apply_transform(NvStabCtx* c)
+{
+    (void)c;
+    return PROC_STATUS_OK;
+}
 
 static ProcStatus nv_stab_process(void* vctx, VP_Frame* frame)
 {
@@ -46,6 +70,24 @@ static ProcStatus nv_stab_process(void* vctx, VP_Frame* frame)
 
     c->frame_count++;
     printf("[nv-stabilizer] process: frame=%lu\n", c->frame_count);
+
+    ProcStatus st;
+
+    st = nv_stab_prepare_frame(c, frame);
+    if (st != PROC_STATUS_OK)
+        return st;
+
+    st = nv_stab_compute_flow(c);
+    if (st != PROC_STATUS_OK)
+        return st;
+
+    st = nv_stab_compute_transform(c);
+    if (st != PROC_STATUS_OK)
+        return st;
+
+    st = nv_stab_apply_transform(c);
+    if (st != PROC_STATUS_OK)
+        return st;
 
     return PROC_STATUS_OK;
 }
