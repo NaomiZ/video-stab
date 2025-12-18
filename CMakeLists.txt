@@ -24,6 +24,17 @@ target_include_directories(${PROJECT_NAME}
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         /home/fronti/gst-plugins/processing-libs/
+        /opt/nvidia/vpi3/include    
+)
+
+target_link_directories(${PROJECT_NAME}
+    PRIVATE
+        /opt/nvidia/vpi3/lib/aarch64-linux-gnu/
+)
+
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+        nvvpi
 )
 
 # Generic properties for a plugin-style shared library

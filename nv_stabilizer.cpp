@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <vpi/VPI.h>
 
 constexpr static int max_history_size = 10;
 typedef struct {
@@ -11,12 +12,23 @@ typedef struct {
 } NvStabHistory;
 
 typedef struct {
-    unsigned long frame_count;
+    uint64_t frame_count;
+
     const char* cfg_path_seen;
     NvStabHistory history;
     int history_index;
     int prev_cx, prev_cy;
+
     bool has_prev;
+    bool dims_valid;
+
+    VPIStream stream;
+
+    VPIImage cur_img;
+    VPIImage prev_img;
+
+    VPIImage in_wrap;   // wrapper around VP_Frame memory (per-call)
+
 } NvStabCtx;
 
 static ProcStatus nv_stab_init(const char* config_path, void** ctx)
