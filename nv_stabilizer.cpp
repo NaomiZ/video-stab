@@ -37,6 +37,7 @@ typedef struct {
 
     int width;
     int height;
+    int stride;
 
     bool dims_valid;
 
@@ -69,7 +70,8 @@ static ProcStatus nv_stab_init(const char* config_path, void** ctx)
     c->dims_valid = false;
     c->width = 0;
     c->height = 0;
-    
+    c->stride = 0;
+
     VPIStatus st;
 
     st = vpiStreamCreate(0, &c->vpi_stream);
@@ -109,8 +111,8 @@ static void fill_vpi_y_plane_data(VPIImageData* inData, VP_Frame* frame) {
     inData->buffer.pitch.planes[0].height = frame->height;
 }
 
-static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h) {
-    if (!c->dims_valid || c->width != w || c->height != h) {
+static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) {
+    if (!c->dims_valid || c->width != w || c->height != h || c->stride != stride) {
         if (c->cur_img_y) {
             printf("[nv-stabilizer] prepare: before destroy\n");
             vpiImageDestroy(c->cur_img_y);  
@@ -168,7 +170,7 @@ static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
     const int stride = frame->stride;
     printf("[nv-stabilizer] prepare: step0 ended\n");
 
-    if(nv_stab_reset_context(c, w, h) != PROC_STATUS_OK) {
+    if(nv_stab_reset_context(c, w, h, stride) != PROC_STATUS_OK) {
         printf("[nv-stabilizer] prepare: reset_context failed\n");
         return PROC_STATUS_ERR_GENERAL;
     }
@@ -198,10 +200,11 @@ static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
     /* ------------------------------------------------------------------
      * 4. Copy caller frame into VPI-owned cur_img_y
      * ------------------------------------------------------------------ */
-    // CHECK_STATUS(nv_vpi_submit_copy(c->vpi_stream,
-    //                         VPI_BACKEND_CPU,
-    //                         c->in_wrap,
-    //                         c->cur_img_y));
+    CHECK_STATUS(nv_vpi_submit_copy(c->vpi_stream,
+                            VPI_BACKEND_CPU,
+                            c->in_wrap,
+                            c->cur_img_y));
+    st = vpiStreamSync(c->vpi_stream);
     /* ------------------------------------------------------------------
      * 5. Initialize prev_img_y on first usable frame
      * ------------------------------------------------------------------ */
