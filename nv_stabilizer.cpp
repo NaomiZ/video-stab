@@ -1,10 +1,10 @@
 #include "processor_api.h"
-#include <stdio.h>
+#include <sstream>
+#include <iostream>
 #include <stdlib.h>
 #include <string.h>
 #include <vpi/VPI.h>
 #include <vpi/algo/ConvertImageFormat.h>
-
 #define CHECK_STATUS(STMT)                                    \
     do                                                        \
     {                                                         \
@@ -96,13 +96,26 @@ nv_vpi_submit_copy(VPIStream stream, VPIBackend backend, VPIImage src, VPIImage 
     );
 }
 
+static void fill_vpi_y_plane_data(VPIImageData* inData, VP_Frame* frame) {
+    memset(inData, 0, sizeof(*inData));
+    inData->bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
+    inData->buffer.pitch.format = VPI_IMAGE_FORMAT_Y8;
+    inData->buffer.pitch.numPlanes = 1;
+    uint8_t* y  = frame->data;
+
+    inData->buffer.pitch.planes[0].data = y;
+    inData->buffer.pitch.planes[0].pitchBytes = frame->stride;
+    inData->buffer.pitch.planes[0].width = frame->width;
+    inData->buffer.pitch.planes[0].height = frame->height;
+}
+
 static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h) {
     if (!c->dims_valid || c->width != w || c->height != h) {
         if (c->cur_img_y) {
             printf("[nv-stabilizer] prepare: before destroy\n");
             vpiImageDestroy(c->cur_img_y);  
             printf("[nv-stabilizer] prepare: after destroy\n");
-            c->cur_img_y  = NULL; 
+            c->cur_img_y = NULL; 
         }
         printf("[nv-stabilizer] prepare: step1.1 ended\n");
 
@@ -174,44 +187,21 @@ static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
      * 3. Wrap VP_Frame memory as NV12 pitch-linear
      *    Assumption (temporary): contiguous NV12 (Y then UV)
      * ------------------------------------------------------------------ */
-    uint8_t* y  = frame->data;
-    uint8_t* uv = frame->data + (size_t)stride * h;
-
+    
     VPIImageData inData;
-    memset(&inData, 0, sizeof(inData));
+    fill_vpi_y_plane_data(&inData, frame);
 
-    inData.bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
-    inData.buffer.pitch.format = VPI_IMAGE_FORMAT_NV12;
-    inData.buffer.pitch.numPlanes = 2;
-
-    inData.buffer.pitch.planes[0].data = y;
-    inData.buffer.pitch.planes[0].pitchBytes = stride;
-    inData.buffer.pitch.planes[0].width = w;
-    inData.buffer.pitch.planes[0].height = h;
-
-    inData.buffer.pitch.planes[1].data = uv;
-    inData.buffer.pitch.planes[1].pitchBytes = stride;
-    inData.buffer.pitch.planes[1].width = w;
-    inData.buffer.pitch.planes[1].height = h / 2;
-
-    st = vpiImageCreateWrapper(&inData, NULL, 0, &c->in_wrap);
-    if (st != VPI_SUCCESS) {
-        c->in_wrap = NULL;
-        return PROC_STATUS_ERR_GENERAL;
-    }
+    CHECK_STATUS(vpiImageCreateWrapper(&inData, NULL, 0, &c->in_wrap));
 
     printf("[nv-stabilizer] prepare: step3 ended\n");
 
     /* ------------------------------------------------------------------
      * 4. Copy caller frame into VPI-owned cur_img_y
      * ------------------------------------------------------------------ */
-    st = nv_vpi_submit_copy(c->vpi_stream,
-                            VPI_BACKEND_CPU,
-                            c->in_wrap,
-                            c->cur_img_y);
-    if (st != VPI_SUCCESS)
-        return PROC_STATUS_ERR_GENERAL;
-
+    // CHECK_STATUS(nv_vpi_submit_copy(c->vpi_stream,
+    //                         VPI_BACKEND_CPU,
+    //                         c->in_wrap,
+    //                         c->cur_img_y));
     /* ------------------------------------------------------------------
      * 5. Initialize prev_img_y on first usable frame
      * ------------------------------------------------------------------ */
@@ -286,8 +276,12 @@ static void nv_stab_destroy(void* vctx)
     fprintf(stderr,
         "[nv-stabilizer] destroy: total_frames=%lu\n",
         c->frame_count);
+    if (c->cur_img_y)  vpiImageDestroy(c->cur_img_y);
+    if (c->prev_img_y) vpiImageDestroy(c->prev_img_y);
+    if (c->in_wrap) vpiImageDestroy(c->in_wrap);
+    if (c->vpi_stream)  vpiStreamDestroy(c->vpi_stream);
 
-    free(c);
+    delete c;
 }
 
 ProcStatus proc_register(ProcessorAPI* api)
