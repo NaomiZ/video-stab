@@ -489,7 +489,7 @@ static void nv_stab_smooth_motion(NvStabCtx* c)
 static ProcStatus nv_stab_apply_stabilization(NvStabCtx* c, VP_Frame* output)
 {
     printf("[nv-stabilizer] Applying stabilization to output frame\n");
-    if (!output) {
+    if (!output || !output->data) {
         printf("[nv-stabilizer] Invalid output frame\n");
         return PROC_STATUS_ERR_GENERAL;
     }
@@ -566,14 +566,16 @@ static ProcStatus nv_stab_apply_stabilization(NvStabCtx* c, VP_Frame* output)
         printf("[nv-stabilizer] Locked stabilized image for output copy\n");
         fflush(stdout);
         const uint8_t* stabilized_src = (const uint8_t*)stabilized_data.buffer.pitch.planes[0].data;
+        printf("[nv-stabilizer] after stabilized_src\n");
+        fflush(stdout);
         if(!output->data) {
-            vpiImageUnlock(c->out_img_y);
             printf("[nv-stabilizer] Output frame has no data buffer\n");
+            vpiImageUnlock(c->out_img_y);
             return PROC_STATUS_ERR_GENERAL;
         }
-        uint8_t* output_dst = (uint8_t*)output->data;
-        printf("[nv-stabilizer] stabilized_src\n");
+        printf("[nv-stabilizer] before output_dst\n");
         fflush(stdout);
+        uint8_t* output_dst = (uint8_t*)output->data;
         int y_size = width * height;
         
         // Copy Y plane only (UV passes through unchanged from input)

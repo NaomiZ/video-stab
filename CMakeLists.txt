@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.12)
 # If you rename the directory, CMake will default PROJECT_NAME to that dir name
 project(nv_stabilizer CXX)
 
+
+
 # Source file convention: <project_name>.cpp
 set(${PROJECT_NAME}_SOURCES
     ${PROJECT_NAME}.cpp
@@ -47,6 +49,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${PROJECT_NAME} PRIVATE
         -Wall -Wextra -Wpedantic
+        -O0 -g    # Disable optimizations and add debug symbols
         # Uncomment if you want to treat warnings as errors:
         # -Werror
     )
