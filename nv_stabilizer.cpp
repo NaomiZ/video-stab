@@ -6,6 +6,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <vpi/VPI.h>
 #include <vpi/algo/ConvertImageFormat.h>
 #include <vpi/algo/PerspectiveWarp.h>
@@ -108,9 +109,11 @@ static ProcStatus nv_stab_init(const char* config_path, void** ctx)
     }
 
     // Harris corner detection parameters
-    c->harris_params.strengthThresh = 0.05f;
-    c->harris_params.sensitivity = 0.08f;
-    c->harris_params.minNMSDistance = 8;
+    // Use safer values - start conservative
+    memset(&c->harris_params, 0, sizeof(c->harris_params));
+    c->harris_params.strengthThresh = 0.01f;  // Very low threshold
+    c->harris_params.sensitivity = 0.01f;     // Low sensitivity
+    c->harris_params.minNMSDistance = 5;      // Small distance
 
     // KLT tracking parameters
     c->klt_params.numberOfIterationsScaling = 2;
@@ -128,38 +131,7 @@ static ProcStatus nv_stab_init(const char* config_path, void** ctx)
     return PROC_STATUS_OK;
 }
 
-static inline VPIStatus
-nv_vpi_submit_copy(VPIStream stream, VPIBackend backend, VPIImage src, VPIImage dst)
-{
-    return vpiSubmitConvertImageFormat(stream, backend, src, dst, NULL);
-}
 
-static void fill_vpi_y_plane_data(VPIImageData* inData, VP_Frame* frame) {
-    memset(inData, 0, sizeof(*inData));
-    inData->bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
-    inData->buffer.pitch.format = VPI_IMAGE_FORMAT_Y8;
-    inData->buffer.pitch.numPlanes = 1;
-
-    inData->buffer.pitch.planes[0].data = frame->data;
-    inData->buffer.pitch.planes[0].pitchBytes = frame->stride;
-    inData->buffer.pitch.planes[0].width = frame->width;
-    inData->buffer.pitch.planes[0].height = frame->height;
-}
-
-static void fill_vpi_uv_plane_data(VPIImageData* uvData, VP_Frame* frame) {
-    memset(uvData, 0, sizeof(*uvData));
-    uvData->bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
-    uvData->buffer.pitch.format = VPI_IMAGE_FORMAT_Y8_ER;  // Treat UV as raw Y8 bytes
-    uvData->buffer.pitch.numPlanes = 1;
-
-    // UV starts after Y plane
-    uint8_t* uv_start = frame->data + (frame->width * frame->height);
-    
-    uvData->buffer.pitch.planes[0].data = uv_start;
-    uvData->buffer.pitch.planes[0].pitchBytes = frame->stride;  // Same stride
-    uvData->buffer.pitch.planes[0].width = frame->width;
-    uvData->buffer.pitch.planes[0].height = frame->height / 2;  // Half height for NV12 UV plane
-}
 
 static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) {
     printf("[nv-stabilizer] reset_context check: dims_valid=%d, width=%d/%d, height=%d/%d, stride=%d/%d\n",
@@ -185,9 +157,9 @@ static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) 
 
         // Create Y plane images
         printf("[nv-stabilizer] Creating Y images %dx%d\n", w, h);
-        CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8_ER, 0, &c->cur_img_y));
-        CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8_ER, 0, &c->prev_img_y));
-        CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8_ER, 0, &c->out_img_y));
+        CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8, 0, &c->cur_img_y));
+        CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8, 0, &c->prev_img_y));
+        CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8, 0, &c->out_img_y));
         printf("[nv-stabilizer] Y images created: cur=%p prev=%p out=%p\n", 
                c->cur_img_y, c->prev_img_y, c->out_img_y);
 
@@ -208,22 +180,28 @@ static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) 
         if (c->tracked_features) vpiArrayDestroy(c->tracked_features);
         if (c->tracking_estimates) vpiArrayDestroy(c->tracking_estimates);
 
-        // Create Harris corner detector
-        printf("[nv-stabilizer] Creating Harris detector %dx%d\n", w, h);
-        fflush(stdout);
-        CHECK_STATUS(vpiCreateHarrisCornerDetector(VPI_BACKEND_CUDA, w, h, &c->harris_payload));
-        printf("[nv-stabilizer] Harris created: %p\n", c->harris_payload);
-        fflush(stdout);
-
-        // Create KLT feature tracker
-        CHECK_STATUS(vpiCreateKLTFeatureTracker(VPI_BACKEND_CUDA, w, h,
-                                                 VPI_IMAGE_FORMAT_Y8_ER, 0, &c->klt_payload));
-
-        // Create keypoint arrays
+        // Create keypoint arrays BEFORE Harris (order might matter)
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KEYPOINT_F32, 0, &c->keypoints_cur));
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KEYPOINT_F32, 0, &c->keypoints_prev));
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KEYPOINT_F32, 0, &c->tracked_features));
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KLT_TRACKED_BOUNDING_BOX, 0, &c->tracking_estimates));
+
+        // Create Harris corner detector
+        printf("[nv-stabilizer] Creating Harris detector %dx%d\n", w, h);
+        fflush(stdout);
+        VPIStatus harris_st = vpiCreateHarrisCornerDetector(VPI_BACKEND_CUDA, w, h, &c->harris_payload);
+        if (harris_st != VPI_SUCCESS) {
+            printf("[nv-stabilizer] Harris creation FAILED: %s\n", vpiStatusGetName(harris_st));
+            fflush(stdout);
+            c->harris_payload = NULL;
+        } else {
+            printf("[nv-stabilizer] Harris created: %p\n", c->harris_payload);
+            fflush(stdout);
+        }
+
+        // Create KLT feature tracker
+        CHECK_STATUS(vpiCreateKLTFeatureTracker(VPI_BACKEND_CUDA, w, h,
+                                                 VPI_IMAGE_FORMAT_Y8, 0, &c->klt_payload));
 
         c->has_prev_features = false;
         printf("[nv-stabilizer] Context reset: %dx%d, Harris+KLT initialized\n", w, h);
@@ -285,54 +263,69 @@ static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
 
 static ProcStatus nv_stab_detect_features(NvStabCtx *c)
 {
-    // DISABLED Harris detection for debugging
-    printf("[nv-stabilizer] detect_features SKIPPED (Harris disabled for debugging)\n");
-    return PROC_STATUS_OK;
-}
-
-/*
-static ProcStatus nv_stab_detect_features_ORIG(NvStabCtx *c)
-{
-    VPIStream s = c->vpi_stream;
-    VPIPayload p = c->harris_payload;
-    VPIImage img = c->cur_img_y;
-    VPIArray arr = c->keypoints_cur;
-    VPIHarrisCornerDetectorParams* params = &c->harris_params;
+    // Grid-based keypoint generation
+    // Harris detector doesn't work on this VPI/CUDA setup
+    VPIArrayData arrInit;
+    CHECK_STATUS(vpiArrayLockData(c->keypoints_cur, VPI_LOCK_WRITE, VPI_ARRAY_BUFFER_HOST_AOS, &arrInit));
     
-    printf("[nv-stabilizer] detect_features: stream=%p, payload=%p, image=%p, array=%p, params=%p\n",
-           s, p, img, arr, params);
-    fflush(stdout);
+    VPIKeypointF32* kpts = (VPIKeypointF32*)arrInit.buffer.aos.data;
+    int num_kpts = 0;
+    const int grid_spacing = 100;
     
-    // Run Harris corner detector on current Y image (scores output can be NULL)
-    printf("[nv-stabilizer] Calling vpiSubmitHarrisCornerDetector\n");
-    fflush(stdout);
-    
-    CHECK_STATUS(vpiSubmitHarrisCornerDetector(s, VPI_BACKEND_CUDA, p, img, arr, NULL, params));
-    
-    CHECK_STATUS(vpiStreamSync(c->vpi_stream));
-
-    // Check how many features were detected
-    VPIArrayData kpData;
-    CHECK_STATUS(vpiArrayLockData(c->keypoints_cur, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &kpData));
-    int num_features = *kpData.buffer.aos.sizePointer;
-    vpiArrayUnlock(c->keypoints_cur);
-
-    printf("[nv-stabilizer] Harris detected %d features\n", num_features);
-    
-    if (num_features < 20) {
-        printf("[nv-stabilizer] WARNING: Too few features detected (%d < 20)\n", num_features);
+    for (int y = 50; y < c->height && num_kpts < 500; y += grid_spacing) {
+        for (int x = 50; x < c->width && num_kpts < 500; x += grid_spacing) {
+            kpts[num_kpts].x = (float)x;
+            kpts[num_kpts].y = (float)y;
+            num_kpts++;
+        }
     }
-
+    
+    *arrInit.buffer.aos.sizePointer = num_kpts;
+    vpiArrayUnlock(c->keypoints_cur);
+    
+    printf("[nv-stabilizer] Generated %d grid-based keypoints\n", num_kpts);
     return PROC_STATUS_OK;
 }
-*/
 
 static ProcStatus nv_stab_track_features(NvStabCtx *c)
 {
-    // DISABLED KLT tracking for debugging - just fake it
-    c->num_tracked_points = 5;  // Fake count to allow warp
-    c->has_prev_features = true;
-    printf("[nv-stabilizer] KLT tracking SKIPPED (disabled for debugging)\n");
+    if (!c->has_prev_features) {
+        // First frame: just copy keypoints to prev and return
+        VPIArrayData curData, prevData;
+        CHECK_STATUS(vpiArrayLockData(c->keypoints_cur, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &curData));
+        CHECK_STATUS(vpiArrayLockData(c->keypoints_prev, VPI_LOCK_WRITE, VPI_ARRAY_BUFFER_HOST_AOS, &prevData));
+        
+        int32_t numElements = *curData.buffer.aos.sizePointer;
+        size_t copySize = numElements * curData.buffer.aos.strideBytes;
+        memcpy(prevData.buffer.aos.data, curData.buffer.aos.data, copySize);
+        *prevData.buffer.aos.sizePointer = numElements;
+        
+        vpiArrayUnlock(c->keypoints_prev);
+        vpiArrayUnlock(c->keypoints_cur);
+        
+        c->has_prev_features = true;
+        c->num_tracked_points = numElements;
+        printf("[nv-stabilizer] First frame: stored %d grid keypoints\n", numElements);
+        return PROC_STATUS_OK;
+    }
+
+    // For grid-based points, simply re-generate and compute displacement
+    // Copy current to previous for motion estimation
+    VPIArrayData curData, prevData;
+    CHECK_STATUS(vpiArrayLockData(c->keypoints_cur, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &curData));
+    CHECK_STATUS(vpiArrayLockData(c->keypoints_prev, VPI_LOCK_WRITE, VPI_ARRAY_BUFFER_HOST_AOS, &prevData));
+    
+    int32_t numElements = *curData.buffer.aos.sizePointer;
+    size_t copySize = numElements * curData.buffer.aos.strideBytes;
+    memcpy(prevData.buffer.aos.data, curData.buffer.aos.data, copySize);
+    *prevData.buffer.aos.sizePointer = numElements;
+    
+    vpiArrayUnlock(c->keypoints_prev);
+    vpiArrayUnlock(c->keypoints_cur);
+    
+    c->num_tracked_points = numElements;
+    printf("[nv-stabilizer] Prepared %d grid points for motion estimation\n", numElements);
+
     return PROC_STATUS_OK;
 }
 
@@ -342,40 +335,97 @@ static ProcStatus nv_stab_estimate_motion(NvStabCtx* c)
         // Not enough points for affine estimation, use identity
         c->affine_matrix[0] = 1.0f; c->affine_matrix[1] = 0.0f; c->affine_matrix[2] = 0.0f;
         c->affine_matrix[3] = 0.0f; c->affine_matrix[4] = 1.0f; c->affine_matrix[5] = 0.0f;
+        printf("[nv-stabilizer] Insufficient points, using identity motion\n");
         return PROC_STATUS_OK;
     }
 
-    // Lock tracked features to get correspondences
-    VPIArrayData prevData, curData;
-    CHECK_STATUS(vpiArrayLockData(c->keypoints_prev, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &prevData));
-    CHECK_STATUS(vpiArrayLockData(c->tracked_features, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &curData));
+    // Read current and previous frame Y data directly for simple registration
+    // Use template matching on grid regions for robust motion estimation
+    VPIImageData cur_img_data, prev_img_data;
+    CHECK_STATUS(vpiImageLockData(c->cur_img_y, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &cur_img_data));
+    CHECK_STATUS(vpiImageLockData(c->prev_img_y, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &prev_img_data));
+    
+    uint8_t* cur_buf = (uint8_t*)cur_img_data.buffer.pitch.planes[0].data;
+    uint8_t* prev_buf = (uint8_t*)prev_img_data.buffer.pitch.planes[0].data;
+    int pitch = cur_img_data.buffer.pitch.planes[0].pitchBytes;
+    int width = c->width;
+    int height = c->height;
 
-    VPIKeypointF32* prevPts = (VPIKeypointF32*)prevData.buffer.aos.data;
-    VPIKeypointF32* curPts = (VPIKeypointF32*)curData.buffer.aos.data;
-    int numPts = std::min(*prevData.buffer.aos.sizePointer, c->num_tracked_points);
-
-    // Simple median-based translation estimation (robust to outliers)
+    // Read keypoints to get grid positions
+    VPIArrayData kp_data;
+    CHECK_STATUS(vpiArrayLockData(c->keypoints_cur, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &kp_data));
+    VPIKeypointF32* kpts = (VPIKeypointF32*)kp_data.buffer.aos.data;
+    int num_kpts = *kp_data.buffer.aos.sizePointer;
+    
+    // Simple block matching at grid points
     std::vector<float> dxs, dys;
-    for (int i = 0; i < numPts; i++) {
-        dxs.push_back(curPts[i].x - prevPts[i].x);
-        dys.push_back(curPts[i].y - prevPts[i].y);
+    const int template_size = 15;  // 15x15 template
+    const int search_range = 30;   // Search ±30 pixels
+    
+    for (int k = 0; k < std::min(num_kpts, 50); k++) {
+        int x = (int)kpts[k].x;
+        int y = (int)kpts[k].y;
+        
+        // Bounds check for template extraction
+        if (x - template_size/2 < 0 || x + template_size/2 >= width ||
+            y - template_size/2 < 0 || y + template_size/2 >= height) {
+            continue;
+        }
+        
+        // Extract template from previous frame
+        int best_dx = 0, best_dy = 0;
+        int best_error = INT_MAX;
+        
+        for (int dy = -search_range; dy <= search_range; dy++) {
+            for (int dx = -search_range; dx <= search_range; dx++) {
+                int nx = x + dx;
+                int ny = y + dy;
+                
+                if (nx - template_size/2 < 0 || nx + template_size/2 >= width ||
+                    ny - template_size/2 < 0 || ny + template_size/2 >= height) {
+                    continue;
+                }
+                
+                // Compute SAD (Sum of Absolute Differences)
+                int error = 0;
+                for (int ty = -template_size/2; ty <= template_size/2; ty++) {
+                    for (int tx = -template_size/2; tx <= template_size/2; tx++) {
+                        int prev_idx = (y + ty) * pitch + (x + tx);
+                        int cur_idx = (ny + ty) * pitch + (nx + tx);
+                        error += abs((int)prev_buf[prev_idx] - (int)cur_buf[cur_idx]);
+                    }
+                }
+                
+                if (error < best_error) {
+                    best_error = error;
+                    best_dx = dx;
+                    best_dy = dy;
+                }
+            }
+        }
+        
+        dxs.push_back((float)best_dx);
+        dys.push_back((float)best_dy);
     }
-
-    vpiArrayUnlock(c->tracked_features);
-    vpiArrayUnlock(c->keypoints_prev);
-
+    
+    vpiArrayUnlock(c->keypoints_cur);
+    vpiImageUnlock(c->prev_img_y);
+    vpiImageUnlock(c->cur_img_y);
+    
     if (dxs.empty()) {
+        printf("[nv-stabilizer] No valid block matches, using identity\n");
         c->affine_matrix[0] = 1.0f; c->affine_matrix[1] = 0.0f; c->affine_matrix[2] = 0.0f;
         c->affine_matrix[3] = 0.0f; c->affine_matrix[4] = 1.0f; c->affine_matrix[5] = 0.0f;
         return PROC_STATUS_OK;
     }
 
+    // Median filter to get robust motion estimate
     std::sort(dxs.begin(), dxs.end());
     std::sort(dys.begin(), dys.end());
     float med_dx = dxs[dxs.size() / 2];
     float med_dy = dys[dys.size() / 2];
 
-    // Build affine transform (translation only for now)
+    // Build affine transform (translation only)
     // Inverse for stabilization: move frame opposite to camera motion
     c->affine_matrix[0] = 1.0f;
     c->affine_matrix[1] = 0.0f;
@@ -384,8 +434,8 @@ static ProcStatus nv_stab_estimate_motion(NvStabCtx* c)
     c->affine_matrix[4] = 1.0f;
     c->affine_matrix[5] = -med_dy;  // ty (inverse)
 
-    printf("[nv-stabilizer] Motion: dx=%.2f dy=%.2f (from %d points)\n", 
-           med_dx, med_dy, numPts);
+    printf("[nv-stabilizer] Block match motion: dx=%.2f dy=%.2f (from %d matches)\n", 
+           med_dx, med_dy, (int)dxs.size());
 
     return PROC_STATUS_OK;
 }
@@ -417,21 +467,10 @@ static void nv_stab_smooth_motion(NvStabCtx* c)
 
 static ProcStatus nv_stab_apply_stabilization(NvStabCtx* c, VP_Frame* frame)
 {
-    // DISABLED perspective warp for debugging - just copy Y plane back unchanged
-    // Copy Y plane data back to frame
-    {
-        VPIImageData imgData;
-        CHECK_STATUS(vpiImageLockData(c->cur_img_y, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &imgData));
-        
-        uint8_t* src = (uint8_t*)imgData.buffer.pitch.planes[0].data;
-        uint8_t* dst = (uint8_t*)frame->data;
-        int y_size = frame->width * frame->height;
-        memcpy(dst, src, y_size);
-        
-        vpiImageUnlock(c->cur_img_y);
-    }
-    
-    printf("[nv-stabilizer] apply_stabilization SKIPPED (warp disabled for debugging)\n");
+    // Motion compensation disabled - NVMM buffer write issues
+    // Just log the motion for now
+    printf("[nv-stabilizer] Detected motion: shift_x=%.0f shift_y=%.0f (not applied due to NVMM limitations)\n", 
+           c->smoothed_affine[2], c->smoothed_affine[5]);
     return PROC_STATUS_OK;
 }
 
@@ -465,6 +504,13 @@ static ProcStatus nv_stab_process(void* vctx, VP_Frame* frame)
         fflush(stdout);
         st = nv_stab_detect_features(c);
         if (st != PROC_STATUS_OK) return st;
+        
+        // Read the actual number of detected features
+        VPIArrayData kpData;
+        CHECK_STATUS(vpiArrayLockData(c->keypoints_cur, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &kpData));
+        c->num_tracked_points = *kpData.buffer.aos.sizePointer;
+        vpiArrayUnlock(c->keypoints_cur);
+        
         c->redetect_counter = 0;
     }
 
