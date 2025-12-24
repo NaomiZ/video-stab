@@ -488,34 +488,53 @@ static void nv_stab_smooth_motion(NvStabCtx* c)
 
 static ProcStatus nv_stab_apply_stabilization(NvStabCtx* c, VP_Frame* output)
 {
-    if (!output || !output->data) {
-        return PROC_STATUS_OK;
+    printf("[nv-stabilizer] Applying stabilization to output frame\n");
+    if (!output) {
+        printf("[nv-stabilizer] Invalid output frame\n");
+        return PROC_STATUS_ERR_GENERAL;
     }
 
+    printf("[nv-stabilizer] Applying stabilization to frame %lu\n", c->frame_count);
+    fflush(stdout);
     int shift_x = (int)c->smoothed_affine[2];
     int shift_y = (int)c->smoothed_affine[5];
 
     if (shift_x == 0 && shift_y == 0) {
+        printf("[nv-stabilizer] No motion to compensate\n");
         return PROC_STATUS_OK;
     }
 
     printf("[nv-stabilizer] Applying stabilization: shift_x=%d shift_y=%d\n", shift_x, shift_y);
+    fflush(stdout);
 
-    uint8_t* out_buf = (uint8_t*)output->data;
-    int width = output->width;
-    int height = output->height;
-    int stride = output->stride;
-
-    // Lock current VPI image to read stabilized frame data
-    VPIImageData cur_data;
+    // Lock VPI images for CPU access
+    VPIImageData cur_data, out_data;
     memset(&cur_data, 0, sizeof(cur_data));
+    memset(&out_data, 0, sizeof(out_data));
+    
+    printf("[nv-stabilizer] Locking current and output images\n");
+    fflush(stdout);
     if (vpiImageLockData(c->cur_img_y, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &cur_data) != VPI_SUCCESS) {
-        printf("[nv-stabilizer] Failed to lock current image for stabilization\n");
+        printf("[nv-stabilizer] Failed to lock current image\n");
         return PROC_STATUS_OK;
     }
+    printf("[nv-stabilizer] Current image locked\n");
+    fflush(stdout);     
+    
+    if (vpiImageLockData(c->out_img_y, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &out_data) != VPI_SUCCESS) {
+        vpiImageUnlock(c->cur_img_y);
+        printf("[nv-stabilizer] Failed to lock output image\n");
+        return PROC_STATUS_OK;
+    }
+    printf("[nv-stabilizer] Output image locked\n");
+    fflush(stdout);
 
     const uint8_t* src_buf = (const uint8_t*)cur_data.buffer.pitch.planes[0].data;
+    uint8_t* dst_buf = (uint8_t*)out_data.buffer.pitch.planes[0].data;
     int src_stride = cur_data.buffer.pitch.planes[0].pitchBytes;
+    int dst_stride = out_data.buffer.pitch.planes[0].pitchBytes;
+    int width = c->width;
+    int height = c->height;
 
     // Apply frame shifting: compensate for detected motion
     // To stabilize: shift frame in OPPOSITE direction of detected motion
@@ -527,17 +546,46 @@ static ProcStatus nv_stab_apply_stabilization(NvStabCtx* c, VP_Frame* output)
 
             if (src_x < 0 || src_x >= width || src_y < 0 || src_y >= height) {
                 // Out of bounds: fill with black
-                out_buf[y * stride + x] = 0;
+                dst_buf[y * dst_stride + x] = 0;
             } else {
                 // In bounds: copy from source
-                out_buf[y * stride + x] = src_buf[src_y * src_stride + src_x];
+                dst_buf[y * dst_stride + x] = src_buf[src_y * src_stride + src_x];
             }
         }
     }
 
+    printf("[nv-stabilizer] Stabilization applied to Y plane locally\n");
+    fflush(stdout);
+    vpiImageUnlock(c->out_img_y);
     vpiImageUnlock(c->cur_img_y);
-    printf("[nv-stabilizer] Stabilization applied to output buffer\n");
-    
+
+    printf("[nv-stabilizer] Copying stabilized Y plane to output frame\n");
+    fflush(stdout);
+    VPIImageData stabilized_data;
+    if (vpiImageLockData(c->out_img_y, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &stabilized_data) == VPI_SUCCESS) {
+        printf("[nv-stabilizer] Locked stabilized image for output copy\n");
+        fflush(stdout);
+        const uint8_t* stabilized_src = (const uint8_t*)stabilized_data.buffer.pitch.planes[0].data;
+        if(!output->data) {
+            vpiImageUnlock(c->out_img_y);
+            printf("[nv-stabilizer] Output frame has no data buffer\n");
+            return PROC_STATUS_ERR_GENERAL;
+        }
+        uint8_t* output_dst = (uint8_t*)output->data;
+        printf("[nv-stabilizer] stabilized_src\n");
+        fflush(stdout);
+        int y_size = width * height;
+        
+        // Copy Y plane only (UV passes through unchanged from input)
+        printf("[nv-stabilizer] Copying bytes of Y plane to output\n");
+        fflush(stdout);
+        memcpy(output_dst, stabilized_src, y_size);
+        
+        vpiImageUnlock(c->out_img_y);
+        printf("[nv-stabilizer] Stabilization applied to Y plane\n");
+    }
+    printf("[nv-stabilizer] Stabilization process complete for frame %lu\n", c->frame_count);
+    fflush(stdout);
     return PROC_STATUS_OK;
 }
 
@@ -547,9 +595,9 @@ static ProcStatus nv_stab_process(void* vctx, VP_Frame* input, VP_Frame* output)
     if (!c || !input || !output)
         return PROC_STATUS_ERR_GENERAL;
 
-        c->frame_count++;
-        printf("[nv-stabilizer] === Frame %lu === Starting process\n", c->frame_count);
-        fflush(stdout);
+    c->frame_count++;
+    printf("[nv-stabilizer] === Frame %lu === Starting process\n", c->frame_count);
+    fflush(stdout);
 
     ProcStatus st;
 
@@ -587,13 +635,22 @@ static ProcStatus nv_stab_process(void* vctx, VP_Frame* input, VP_Frame* output)
     // 4. Smooth motion trajectory
     nv_stab_smooth_motion(c);
 
-    // 5. Apply stabilization warp to OUTPUT buffer (not input)
-    // Motion detection and smoothing work, but direct buffer write causes SIGSEGV
-    // GStreamer needs to copy input→output before calling us, or we need VPI-based copy
+    // 5. Motion compensation - OUTPUT BUFFER LIMITATION
+    // The output buffer (NVMM GPU memory) cannot be directly modified from CPU
+    // even with NvBufSurfaceMap + WRITE access. Attempting memcpy causes SIGSEGV.
+    // 
+    // Working: Motion detection & smoothing (provides stabilization parameters)
+    // Blocked: Direct frame modification (requires GPU-based transformation)
+    //
+    // Possible solutions:
+    // - Use VPI warp operations with compatible formats
+    // - Apply transformation in gstmyf2f using NvBufSurfaceTransform
+    // - Attach motion vectors as metadata for downstream processing
     if (c->has_prev_features && c->num_tracked_points >= 3) {
-        printf("[nv-stabilizer] Motion detected and smoothed: tx=%.0f ty=%.0f (output not modified - GStreamer handles copy)\n",
+        printf("[nv-stabilizer] Stabilization params: tx=%.0f ty=%.0f \n",
                c->smoothed_affine[2], c->smoothed_affine[5]);
     }
+    st = nv_stab_apply_stabilization(c, output);
 
     // 6. Update for next frame: swap images
     VPIImage tmp_y = c->prev_img_y;
