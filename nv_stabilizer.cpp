@@ -648,7 +648,7 @@ static ProcStatus nv_stab_process(void* vctx, VP_Frame* input)
                c->smoothed_affine[2], c->smoothed_affine[5]);
     }
     // TODO: apply_stabilization causes SIGSEGV - skip for now
-    // st = nv_stab_apply_stabilization(c, output);
+    st = nv_stab_apply_stabilization(c, input);
     
     // For now, just copy input to output and apply motion params as metadata
     // The actual stabilization can be done in GPU layer via VPI warp
