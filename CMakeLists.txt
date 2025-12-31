@@ -49,7 +49,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${PROJECT_NAME} PRIVATE
         -Wall -Wextra -Wpedantic
-        -O0 -g    # Disable optimizations and add debug symbols
+        # -O0 -g    # Disable optimizations and add debug symbols
         # Uncomment if you want to treat warnings as errors:
         # -Werror
     )

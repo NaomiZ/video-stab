@@ -122,18 +122,15 @@ static ProcStatus nv_stab_init(const char* config_path, void** ctx)
     memcpy(c->smoothed_affine, c->affine_matrix, sizeof(c->affine_matrix));
 
     *ctx = c;
-    printf("[nv-stabilizer] Initialized (VPI resources will be created lazily on first frame)\n");
+    //printf("[nv-stabilizer] Initialized (VPI resources will be created lazily on first frame)\n");
     return PROC_STATUS_OK;
 }
 
-
-
 static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) {
-    printf("[nv-stabilizer] reset_context check: dims_valid=%d, width=%d/%d, height=%d/%d, stride=%d/%d\n",
-           c->dims_valid, c->width, w, c->height, h, c->stride, stride);
+    //printf("[nv-stabilizer] reset_context check: dims_valid=%d, width=%d/%d, height=%d/%d, stride=%d/%d\n", c->dims_valid, c->width, w, c->height, h, c->stride, stride);
     
     if (!c->dims_valid || c->width != w || c->height != h || c->stride != stride) {
-        printf("[nv-stabilizer] Resetting context for new dimensions\n");
+        //printf("[nv-stabilizer] Resetting context for new dimensions\n");
         
         c->width = w;
         c->height = h;
@@ -142,10 +139,10 @@ static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) 
 
         // Create VPI stream if not already created (lazy init for thread safety)
         if (!c->vpi_stream) {
-            printf("[nv-stabilizer] Creating VPI stream (lazy init)\n");
+            //printf("[nv-stabilizer] Creating VPI stream (lazy init)\n");
             VPIStatus st = vpiStreamCreate(0, &c->vpi_stream);
             if (st != VPI_SUCCESS) {
-                printf("[nv-stabilizer] vpiStreamCreate failed: %d\n", (int)st);
+                //printf("[nv-stabilizer] vpiStreamCreate failed: %d\n", (int)st);
                 return PROC_STATUS_ERR_GENERAL;
             }
         }
@@ -161,15 +158,14 @@ static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) 
         if (c->out_img_uv) vpiImageDestroy(c->out_img_uv);
 
         // Create Y plane images
-        printf("[nv-stabilizer] Creating Y images %dx%d\n", w, h);
+        //printf("[nv-stabilizer] Creating Y images %dx%d\n", w, h);
         CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8, 0, &c->cur_img_y));
         CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8, 0, &c->prev_img_y));
         CHECK_STATUS(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y8, 0, &c->out_img_y));
-        printf("[nv-stabilizer] Y images created: cur=%p prev=%p out=%p\n", 
-               c->cur_img_y, c->prev_img_y, c->out_img_y);
+        //printf("[nv-stabilizer] Y images created: cur=%p prev=%p out=%p\n", c->cur_img_y, c->prev_img_y, c->out_img_y);
 
         // UV plane images disabled - not used in current stabilization implementation
-        printf("[nv-stabilizer] Skipping UV image creation (Y-plane only stabilization)\n");
+        //printf("[nv-stabilizer] Skipping UV image creation (Y-plane only stabilization)\n");
         c->cur_img_uv = NULL;
         c->prev_img_uv = NULL;
         c->out_img_uv = NULL;
@@ -183,23 +179,20 @@ static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) 
         if (c->tracking_estimates) vpiArrayDestroy(c->tracking_estimates);
 
         // Create keypoint arrays (on processing thread for thread safety)
-        printf("[nv-stabilizer] Creating VPI arrays\n");
+        //printf("[nv-stabilizer] Creating VPI arrays\n");
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KEYPOINT_F32, 0, &c->keypoints_cur));
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KEYPOINT_F32, 0, &c->keypoints_prev));
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KEYPOINT_F32, 0, &c->tracked_features));
         CHECK_STATUS(vpiArrayCreate(500, VPI_ARRAY_TYPE_KLT_TRACKED_BOUNDING_BOX, 0, &c->tracking_estimates));
 
         // Create Harris corner detector
-        printf("[nv-stabilizer] Creating Harris detector %dx%d\n", w, h);
-        fflush(stdout);
+        //printf("[nv-stabilizer] Creating Harris detector %dx%d\n", w, h);
         VPIStatus harris_st = vpiCreateHarrisCornerDetector(VPI_BACKEND_CUDA, w, h, &c->harris_payload);
         if (harris_st != VPI_SUCCESS) {
-            printf("[nv-stabilizer] Harris creation FAILED: %s\n", vpiStatusGetName(harris_st));
-            fflush(stdout);
+            //printf("[nv-stabilizer] Harris creation FAILED: %s\n", vpiStatusGetName(harris_st));
             c->harris_payload = NULL;
         } else {
-            printf("[nv-stabilizer] Harris created: %p\n", c->harris_payload);
-            fflush(stdout);
+            //printf("[nv-stabilizer] Harris created: %p\n", c->harris_payload);
         }
 
         // Create KLT feature tracker
@@ -207,7 +200,7 @@ static ProcStatus nv_stab_reset_context(NvStabCtx *c, int w, int h, int stride) 
                                                  VPI_IMAGE_FORMAT_Y8, 0, &c->klt_payload));
 
         c->has_prev_features = false;
-        printf("[nv-stabilizer] Context reset: %dx%d, VPI resources initialized on processing thread\n", w, h);
+        //printf("[nv-stabilizer] Context reset: %dx%d, VPI resources initialized on processing thread\n", w, h);
     }
     return PROC_STATUS_OK;
 }
@@ -226,11 +219,10 @@ static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
     if(nv_stab_reset_context(c, w, h, stride) != PROC_STATUS_OK)
         return PROC_STATUS_ERR_GENERAL;
 
-    printf("[nv-stabilizer] prepare_frame: w=%d h=%d stride=%d, cur_img_y=%p\n", w, h, stride, c->cur_img_y);
+    //printf("[nv-stabilizer] prepare_frame: w=%d h=%d stride=%d, cur_img_y=%p\n", w, h, stride, c->cur_img_y);
 
     // Copy Y plane data
-    printf("[nv-stabilizer] Copying Y plane\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Copying Y plane\n");
     {
         VPIImageData imgData;
         CHECK_STATUS(vpiImageLockData(c->cur_img_y, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &imgData));
@@ -242,8 +234,7 @@ static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
         
         vpiImageUnlock(c->cur_img_y);
     }
-    printf("[nv-stabilizer] Y plane copied\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Y plane copied\n");
 
     // Copy UV plane data - DISABLED for now due to buffer access issues
     // TODO: Investigate proper VPI UV plane buffer access
@@ -267,24 +258,20 @@ static ProcStatus nv_stab_prepare_frame(NvStabCtx* c, VP_Frame* frame)
 static ProcStatus nv_stab_detect_features(NvStabCtx *c)
 {
     // Grid-based keypoint generation
-    printf("[nv-stabilizer] detect_features: c=%p, keypoints_cur=%p\n", c, c->keypoints_cur);
-    fflush(stdout);
+    //printf("[nv-stabilizer] detect_features: c=%p, keypoints_cur=%p\n", c, c->keypoints_cur);
     
     VPIArrayData arrInit;
-    printf("[nv-stabilizer] About to lock keypoints_cur array...\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] About to lock keypoints_cur array...\n");
     
     CHECK_STATUS(vpiArrayLockData(c->keypoints_cur, VPI_LOCK_WRITE, VPI_ARRAY_BUFFER_HOST_AOS, &arrInit));
     
-    printf("[nv-stabilizer] Successfully locked array\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Successfully locked array\n");
     
     VPIKeypointF32* kpts = (VPIKeypointF32*)arrInit.buffer.aos.data;
     int num_kpts = 0;
     const int grid_spacing = 100;
     
-    printf("[nv-stabilizer] Starting keypoint generation loop\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Starting keypoint generation loop\n");
     
     for (int y = 50; y < c->height && num_kpts < 500; y += grid_spacing) {
         for (int x = 50; x < c->width && num_kpts < 500; x += grid_spacing) {
@@ -294,17 +281,15 @@ static ProcStatus nv_stab_detect_features(NvStabCtx *c)
         }
     }
     
-    printf("[nv-stabilizer] Generated %d keypoints, setting size pointer\n", num_kpts);
-    fflush(stdout);
+    //printf("[nv-stabilizer] Generated %d keypoints, setting size pointer\n", num_kpts);
     
     *arrInit.buffer.aos.sizePointer = num_kpts;
     
-    printf("[nv-stabilizer] Unlocking array\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Unlocking array\n");
     
     vpiArrayUnlock(c->keypoints_cur);
     
-    printf("[nv-stabilizer] Generated %d grid-based keypoints\n", num_kpts);
+    //printf("[nv-stabilizer] Generated %d grid-based keypoints\n", num_kpts);
     return PROC_STATUS_OK;
 }
 
@@ -326,7 +311,7 @@ static ProcStatus nv_stab_track_features(NvStabCtx *c)
         
         c->has_prev_features = true;
         c->num_tracked_points = numElements;
-        printf("[nv-stabilizer] First frame: stored %d grid keypoints\n", numElements);
+        //printf("[nv-stabilizer] First frame: stored %d grid keypoints\n", numElements);
         return PROC_STATUS_OK;
     }
 
@@ -345,7 +330,7 @@ static ProcStatus nv_stab_track_features(NvStabCtx *c)
     vpiArrayUnlock(c->keypoints_cur);
     
     c->num_tracked_points = numElements;
-    printf("[nv-stabilizer] Prepared %d grid points for motion estimation\n", numElements);
+    //printf("[nv-stabilizer] Prepared %d grid points for motion estimation\n", numElements);
 
     return PROC_STATUS_OK;
 }
@@ -356,7 +341,7 @@ static ProcStatus nv_stab_estimate_motion(NvStabCtx* c)
         // Not enough points for affine estimation, use identity
         c->affine_matrix[0] = 1.0f; c->affine_matrix[1] = 0.0f; c->affine_matrix[2] = 0.0f;
         c->affine_matrix[3] = 0.0f; c->affine_matrix[4] = 1.0f; c->affine_matrix[5] = 0.0f;
-        printf("[nv-stabilizer] Insufficient points, using identity motion\n");
+        //printf("[nv-stabilizer] Insufficient points, using identity motion\n");
         return PROC_STATUS_OK;
     }
 
@@ -434,7 +419,7 @@ static ProcStatus nv_stab_estimate_motion(NvStabCtx* c)
     vpiImageUnlock(c->cur_img_y);
     
     if (dxs.empty()) {
-        printf("[nv-stabilizer] No valid block matches, using identity\n");
+        //printf("[nv-stabilizer] No valid block matches, using identity\n");
         c->affine_matrix[0] = 1.0f; c->affine_matrix[1] = 0.0f; c->affine_matrix[2] = 0.0f;
         c->affine_matrix[3] = 0.0f; c->affine_matrix[4] = 1.0f; c->affine_matrix[5] = 0.0f;
         return PROC_STATUS_OK;
@@ -455,8 +440,7 @@ static ProcStatus nv_stab_estimate_motion(NvStabCtx* c)
     c->affine_matrix[4] = 1.0f;
     c->affine_matrix[5] = -med_dy;  // ty (inverse)
 
-    printf("[nv-stabilizer] Block match motion: dx=%.2f dy=%.2f (from %d matches)\n", 
-           med_dx, med_dy, (int)dxs.size());
+    //printf("[nv-stabilizer] Block match motion: dx=%.2f dy=%.2f (from %d matches)\n", med_dx, med_dy, (int)dxs.size());
 
     return PROC_STATUS_OK;
 }
@@ -482,52 +466,46 @@ static void nv_stab_smooth_motion(NvStabCtx* c)
         }
     }
 
-    printf("[nv-stabilizer] Smoothed: tx=%.2f ty=%.2f\n", 
-           c->smoothed_affine[2], c->smoothed_affine[5]);
+    //printf("[nv-stabilizer] Smoothed: tx=%.2f ty=%.2f\n", c->smoothed_affine[2], c->smoothed_affine[5]);
 }
 
 static ProcStatus nv_stab_apply_stabilization(NvStabCtx* c, VP_Frame* output)
 {
-    printf("[nv-stabilizer] Applying stabilization to output frame\n");
+    //printf("[nv-stabilizer] Applying stabilization to output frame\n");
     if (!output || !output->data) {
-        printf("[nv-stabilizer] Invalid output frame\n");
+        //printf("[nv-stabilizer] Invalid output frame\n");
         return PROC_STATUS_ERR_GENERAL;
     }
 
-    printf("[nv-stabilizer] Applying stabilization to frame %lu\n", c->frame_count);
-    fflush(stdout);
+    //printf("[nv-stabilizer] Applying stabilization to frame %lu\n", c->frame_count);
     int shift_x = (int)c->smoothed_affine[2];
     int shift_y = (int)c->smoothed_affine[5];
 
     if (shift_x == 0 && shift_y == 0) {
-        printf("[nv-stabilizer] No motion to compensate\n");
+        //printf("[nv-stabilizer] No motion to compensate\n");
         return PROC_STATUS_OK;
     }
 
     printf("[nv-stabilizer] Applying stabilization: shift_x=%d shift_y=%d\n", shift_x, shift_y);
-    fflush(stdout);
 
     // Lock VPI images for CPU access
     VPIImageData cur_data, out_data;
     memset(&cur_data, 0, sizeof(cur_data));
     memset(&out_data, 0, sizeof(out_data));
     
-    printf("[nv-stabilizer] Locking current and output images\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Locking current and output images\n");
     if (vpiImageLockData(c->cur_img_y, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &cur_data) != VPI_SUCCESS) {
-        printf("[nv-stabilizer] Failed to lock current image\n");
+        //printf("[nv-stabilizer] Failed to lock current image\n");
         return PROC_STATUS_OK;
     }
-    printf("[nv-stabilizer] Current image locked\n");
-    fflush(stdout);     
+    //printf("[nv-stabilizer] Current image locked\n");
     
     if (vpiImageLockData(c->out_img_y, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &out_data) != VPI_SUCCESS) {
         vpiImageUnlock(c->cur_img_y);
-        printf("[nv-stabilizer] Failed to lock output image\n");
+        //printf("[nv-stabilizer] Failed to lock output image\n");
         return PROC_STATUS_OK;
     }
-    printf("[nv-stabilizer] Output image locked\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Output image locked\n");
 
     const uint8_t* src_buf = (const uint8_t*)cur_data.buffer.pitch.planes[0].data;
     uint8_t* dst_buf = (uint8_t*)out_data.buffer.pitch.planes[0].data;
@@ -554,40 +532,33 @@ static ProcStatus nv_stab_apply_stabilization(NvStabCtx* c, VP_Frame* output)
         }
     }
 
-    printf("[nv-stabilizer] Stabilization applied to Y plane locally\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Stabilization applied to Y plane locally\n");
     vpiImageUnlock(c->out_img_y);
     vpiImageUnlock(c->cur_img_y);
 
-    printf("[nv-stabilizer] Copying stabilized Y plane to output frame\n");
-    fflush(stdout);
+    //printf("[nv-stabilizer] Copying stabilized Y plane to output frame\n");
     VPIImageData stabilized_data;
     if (vpiImageLockData(c->out_img_y, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &stabilized_data) == VPI_SUCCESS) {
-        printf("[nv-stabilizer] Locked stabilized image for output copy\n");
-        fflush(stdout);
+        //printf("[nv-stabilizer] Locked stabilized image for output copy\n");
         const uint8_t* stabilized_src = (const uint8_t*)stabilized_data.buffer.pitch.planes[0].data;
-        printf("[nv-stabilizer] after stabilized_src\n");
-        fflush(stdout);
+        //printf("[nv-stabilizer] after stabilized_src\n");
         if(!output->data) {
-            printf("[nv-stabilizer] Output frame has no data buffer\n");
+            //printf("[nv-stabilizer] Output frame has no data buffer\n");
             vpiImageUnlock(c->out_img_y);
             return PROC_STATUS_ERR_GENERAL;
         }
-        printf("[nv-stabilizer] before output_dst\n");
-        fflush(stdout);
+        //printf("[nv-stabilizer] before output_dst\n");
         uint8_t* output_dst = (uint8_t*)output->data;
         int y_size = width * height;
         
         // Copy Y plane only (UV passes through unchanged from input)
-        printf("[nv-stabilizer] Copying bytes of Y plane to output\n");
-        fflush(stdout);
+        //printf("[nv-stabilizer] Copying bytes of Y plane to output\n");
         memcpy(output_dst, stabilized_src, y_size);
         
         vpiImageUnlock(c->out_img_y);
-        printf("[nv-stabilizer] Stabilization applied to Y plane\n");
+        //printf("[nv-stabilizer] Stabilization applied to Y plane\n");
     }
-    printf("[nv-stabilizer] Stabilization process complete for frame %lu\n", c->frame_count);
-    fflush(stdout);
+    //printf("[nv-stabilizer] Stabilization process complete for frame %lu\n", c->frame_count);
     return PROC_STATUS_OK;
 }
 
@@ -607,8 +578,7 @@ static ProcStatus nv_stab_process(void* vctx, VP_Frame* input)
 
     // 2. Detect or track features
     if (c->frame_count == 1 || c->redetect_counter >= 30 || c->num_tracked_points < 20) {
-        printf("[nv-stabilizer] === Calling detect_features ===\n");
-        fflush(stdout);
+        //printf("[nv-stabilizer] === Calling detect_features ===\n");
         st = nv_stab_detect_features(c);
         if (st != PROC_STATUS_OK) return st;
         
@@ -632,27 +602,9 @@ static ProcStatus nv_stab_process(void* vctx, VP_Frame* input)
     // 4. Smooth motion trajectory
     nv_stab_smooth_motion(c);
 
-    // 5. Motion compensation - OUTPUT BUFFER LIMITATION
-    // The output buffer (NVMM GPU memory) cannot be directly modified from CPU
-    // even with NvBufSurfaceMap + WRITE access. Attempting memcpy causes SIGSEGV.
-    // 
-    // Working: Motion detection & smoothing (provides stabilization parameters)
-    // Blocked: Direct frame modification (requires GPU-based transformation)
-    //
-    // Possible solutions:
-    // - Use VPI warp operations with compatible formats
-    // - Apply transformation in gstmyf2f using NvBufSurfaceTransform
-    // - Attach motion vectors as metadata for downstream processing
-    if (c->has_prev_features && c->num_tracked_points >= 3) {
-        printf("[nv-stabilizer] Stabilization params: tx=%.0f ty=%.0f \n",
-               c->smoothed_affine[2], c->smoothed_affine[5]);
-    }
-    // TODO: apply_stabilization causes SIGSEGV - skip for now
+    // 5. Apply stabilization
     st = nv_stab_apply_stabilization(c, input);
-    
-    // For now, just copy input to output and apply motion params as metadata
-    // The actual stabilization can be done in GPU layer via VPI warp
-    printf("[nv-stabilizer] Skipping apply_stabilization for debugging\n");
+    if (st != PROC_STATUS_OK) return st;
 
     // 6. Update for next frame: swap images
     VPIImage tmp_y = c->prev_img_y;
@@ -676,7 +628,7 @@ static void nv_stab_destroy(void* vctx)
     NvStabCtx* c = (NvStabCtx*)vctx;
     if (!c) return;
 
-    printf("[nv-stabilizer] Destroy: processed %lu frames\n", c->frame_count);
+    //printf("[nv-stabilizer] Destroy: processed %lu frames\n", c->frame_count);
 
     // Destroy Y plane images
     if (c->cur_img_y) vpiImageDestroy(c->cur_img_y);
